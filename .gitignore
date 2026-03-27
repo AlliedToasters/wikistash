@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# wikistash data files
+*.duckdb
+*.duckdb.wal
+*.sqlite
+latest-all.json.gz
+download.log
+
+# IDE
+.vscode/
+.idea/
+
+# pytest
+.pytest_cache/
