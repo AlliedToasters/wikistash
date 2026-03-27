@@ -28,6 +28,8 @@ class DumpLoader:
         self,
         dump_path: Path | str,
         filter_qids: set[str] | None = None,
+        instance_of: set[str] | None = None,
+        has_property: set[str] | None = None,
         batch_size: int = 10_000,
         progress_interval: int = 100_000,
     ) -> None:
@@ -36,6 +38,10 @@ class DumpLoader:
         Args:
             dump_path: Path to .json.gz or .json dump file.
             filter_qids: If set, only load these QIDs.
+            instance_of: If set, only load entities whose P31 (instance of)
+                includes at least one of these QIDs (e.g. {"Q5", "Q198"}).
+            has_property: If set, only load entities that have at least one
+                claim for any of these properties (e.g. {"P31", "P569"}).
             batch_size: Rows per batch insert.
             progress_interval: Log progress every N entities scanned.
         """
@@ -54,7 +60,7 @@ class DumpLoader:
                         loaded=loaded,
                     )
 
-                if not self._filter_entity(raw, filter_qids):
+                if not self._filter_entity(raw, filter_qids, instance_of, has_property):
                     continue
 
                 batch.append(raw)
@@ -107,9 +113,49 @@ class DumpLoader:
                     continue
 
     def _filter_entity(
-        self, raw: dict, filter_qids: set[str] | None
+        self,
+        raw: dict,
+        filter_qids: set[str] | None,
+        instance_of: set[str] | None = None,
+        has_property: set[str] | None = None,
     ) -> bool:
-        """Return True if this entity should be loaded."""
-        if filter_qids is None:
+        """Return True if this entity should be loaded.
+
+        Filters are combined with OR — an entity passes if it matches
+        any active filter. Property entities (P-items) always pass
+        when instance_of or has_property is active, since they're
+        needed for label resolution.
+        """
+        # No filters → load everything
+        if filter_qids is None and instance_of is None and has_property is None:
             return True
-        return raw.get("id", "") in filter_qids
+
+        entity_id = raw.get("id", "")
+
+        # Explicit QID list
+        if filter_qids is not None and entity_id in filter_qids:
+            return True
+
+        # Always keep property entities when doing type/property filtering
+        if (instance_of is not None or has_property is not None) and entity_id.startswith("P"):
+            return True
+
+        claims = raw.get("claims", {})
+
+        # Instance-of filter: check P31 claim values
+        if instance_of is not None:
+            for stmt in claims.get("P31", []):
+                try:
+                    qid = stmt["mainsnak"]["datavalue"]["value"]["id"]
+                    if qid in instance_of:
+                        return True
+                except (KeyError, TypeError):
+                    continue
+
+        # Has-property filter: check if any target property exists
+        if has_property is not None:
+            for prop in has_property:
+                if prop in claims:
+                    return True
+
+        return False

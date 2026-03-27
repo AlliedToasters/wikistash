@@ -19,17 +19,23 @@ def cli() -> None:
 @click.argument("dump_path", type=click.Path(exists=True))
 @click.option("--db-path", default="./wikistash.duckdb", help="Path for the DuckDB database.")
 @click.option("--entities", default=None, help="Comma-separated QIDs to filter (e.g. Q42,Q1,Q5).")
+@click.option("--instance-of", "instance_of", default=None,
+              help="Comma-separated P31 type QIDs to keep (e.g. Q5,Q198,Q16521).")
+@click.option("--has-property", "has_property", default=None,
+              help="Comma-separated property IDs — keep entities that have any of these (e.g. P31,P569).")
 @click.option("--languages", default="en", help="Comma-separated language codes to keep.")
 @click.option("--batch-size", default=10_000, type=int, help="Batch insert size.")
-def load(dump_path: str, db_path: str, entities: str | None, languages: str, batch_size: int) -> None:
+def load(dump_path: str, db_path: str, entities: str | None, instance_of: str | None,
+         has_property: str | None, languages: str, batch_size: int) -> None:
     """Load a Wikidata dump into the local database."""
     lang_list = [l.strip() for l in languages.split(",")]
-    filter_qids = None
-    if entities:
-        filter_qids = {q.strip() for q in entities.split(",")}
+    filter_qids = {q.strip() for q in entities.split(",")} if entities else None
+    iof_set = {q.strip() for q in instance_of.split(",")} if instance_of else None
+    hp_set = {p.strip() for p in has_property.split(",")} if has_property else None
 
     loader = DumpLoader(db_path=db_path, languages=lang_list)
-    loader.load(dump_path, filter_qids=filter_qids, batch_size=batch_size)
+    loader.load(dump_path, filter_qids=filter_qids, instance_of=iof_set,
+                has_property=hp_set, batch_size=batch_size)
     click.echo("Done.")
 
 
