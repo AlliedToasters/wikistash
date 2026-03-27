@@ -83,6 +83,19 @@ class Stash:
 
         return execute_sparql(self._local_db.get_connection(), query)
 
+    def sparql_json(self, query: str) -> dict[str, Any]:
+        """Execute a SPARQL query and return standard SPARQL JSON Results format.
+
+        Returns ``{"results": {"bindings": [...]}}`` — the same shape as
+        the Wikidata Query Service, so consumer apps can swap in wikistash
+        with no parsing changes.
+        """
+        if self._local_db is None:
+            raise WikiStashError("SPARQL requires a local database. Load a dump first.")
+        from wikistash.sparql import execute_sparql_json
+
+        return execute_sparql_json(self._local_db.get_connection(), query)
+
     def duckdb(self) -> duckdb.DuckDBPyConnection:
         """Return the raw DuckDB connection for SQL queries."""
         if self._local_db is None:

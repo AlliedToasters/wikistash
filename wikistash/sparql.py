@@ -30,3 +30,47 @@ def execute_sparql(
     rows = result.fetchall()
 
     return [dict(zip(columns, row)) for row in rows]
+
+
+_WD_ENTITY_URI = "http://www.wikidata.org/entity/"
+
+
+def _to_binding_value(key: str, value: Any) -> dict[str, str] | None:
+    """Convert a flat result value to a SPARQL JSON binding value.
+
+    Returns None for NULL values (omitted from bindings per spec).
+    """
+    if value is None:
+        return None
+    s = str(value)
+    # Entity QIDs → URI binding
+    if key not in ("itemLabel", "itemDescription") and _looks_like_qid(s):
+        return {"type": "uri", "value": f"{_WD_ENTITY_URI}{s}"}
+    return {"type": "literal", "value": s}
+
+
+def _looks_like_qid(s: str) -> bool:
+    """Check if a string looks like a Wikidata QID (Q followed by digits)."""
+    return len(s) >= 2 and s[0] == "Q" and s[1:].isdigit()
+
+
+def execute_sparql_json(
+    conn: duckdb.DuckDBPyConnection,
+    query: str,
+) -> dict[str, Any]:
+    """Execute SPARQL and return results in standard SPARQL JSON Results format.
+
+    Returns the ``{"results": {"bindings": [...]}}`` structure that
+    the Wikidata Query Service returns, so consumer apps can use
+    wikistash as a drop-in replacement with no parsing changes.
+    """
+    rows = execute_sparql(conn, query)
+    bindings: list[dict[str, dict[str, str]]] = []
+    for row in rows:
+        binding: dict[str, dict[str, str]] = {}
+        for key, value in row.items():
+            bv = _to_binding_value(key, value)
+            if bv is not None:
+                binding[key] = bv
+        bindings.append(binding)
+    return {"results": {"bindings": bindings}}
