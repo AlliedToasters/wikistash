@@ -58,6 +58,7 @@ def compile_sparql(query: SparqlQuery) -> tuple[str, list[Any]]:
     where_conditions: list[str] = []
     where_params: list[Any] = []
     claim_counter = 0
+    sitelink_counter = 0
 
     # Build maps
     values_map: dict[str, list[str]] = {}
@@ -74,8 +75,10 @@ def compile_sparql(query: SparqlQuery) -> tuple[str, list[Any]]:
     # Process required triple patterns
     for tp in required_triples:
         if tp.predicate == "wikibase:sitelinks":
-            alias = "sl"
-            join_sql = f"JOIN sitelinks {alias} ON {alias}.qid = c0.qid"
+            alias = f"sl{sitelink_counter}"
+            sitelink_counter += 1
+            qid_expr = var_map.get(tp.subject, "c0.qid")
+            join_sql = f"JOIN sitelinks {alias} ON {alias}.qid = {qid_expr}"
             join_params: list[Any] = []
             for flt in filter_map.get(tp.object, []):
                 join_sql += f" AND {alias}.count {flt.operator} ?"
@@ -131,8 +134,11 @@ def compile_sparql(query: SparqlQuery) -> tuple[str, list[Any]]:
     # Process optional triple patterns
     for tp in optional_triples:
         if tp.predicate == "wikibase:sitelinks":
-            joins.append((f"LEFT JOIN sitelinks sl ON sl.qid = c0.qid", []))
-            var_map[tp.object] = "sl.count"
+            alias = f"sl{sitelink_counter}"
+            sitelink_counter += 1
+            qid_expr = var_map.get(tp.subject, "c0.qid")
+            joins.append((f"LEFT JOIN sitelinks {alias} ON {alias}.qid = {qid_expr}", []))
+            var_map[tp.object] = f"{alias}.count"
             continue
 
         prop_id = _property_id(tp.predicate)

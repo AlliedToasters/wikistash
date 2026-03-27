@@ -89,8 +89,8 @@ class TestSitelinks:
             filters=[Filter(variable="sitelinks", operator=">=", value=20)],
         )
         sql, params = compile_sparql(q)
-        assert "JOIN sitelinks sl" in sql
-        assert "sl.count >=" in sql
+        assert "JOIN sitelinks sl0" in sql
+        assert "sl0.count >=" in sql
         assert 20 in params
 
 
