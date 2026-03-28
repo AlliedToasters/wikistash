@@ -32,6 +32,7 @@ class DumpLoader:
         has_property: set[str] | None = None,
         batch_size: int = 10_000,
         progress_interval: int = 100_000,
+        fast: bool = False,
     ) -> None:
         """Load a Wikidata JSON dump into the local DB.
 
@@ -44,11 +45,17 @@ class DumpLoader:
                 claim for any of these properties (e.g. {"P31", "P569"}).
             batch_size: Rows per batch insert.
             progress_interval: Log progress every N entities scanned.
+            fast: If True, skip raw entity JSON storage and use bulk inserts.
+                Much faster but stash.get() won't work — SPARQL queries only.
         """
+        has_filter = (filter_qids is not None or instance_of is not None
+                      or has_property is not None)
         db = LocalDB(self._db_path)
         try:
             batch: list[dict] = []
+            label_batch: list[dict] = []
             loaded = 0
+            labels_saved = 0
             scanned = 0
 
             for raw in self._iter_entities(dump_path):
@@ -58,33 +65,52 @@ class DumpLoader:
                         "dump_progress",
                         scanned=scanned,
                         loaded=loaded,
+                        labels_saved=labels_saved,
                     )
 
                 if not self._filter_entity(raw, filter_qids, instance_of, has_property):
+                    # Even non-matching entities get their labels saved
+                    if has_filter and fast:
+                        label_batch.append(raw)
+                        if len(label_batch) >= batch_size:
+                            db.put_labels_only(label_batch, languages=self._languages)
+                            labels_saved += len(label_batch)
+                            label_batch = []
                     continue
 
                 batch.append(raw)
                 if len(batch) >= batch_size:
+                    if fast:
+                        db.put_batch_fast(batch, languages=self._languages)
+                    else:
+                        db.put_batch(
+                            batch,
+                            dump_date=date.today(),
+                            source="dump",
+                            languages=self._languages,
+                        )
+                    loaded += len(batch)
+                    batch = []
+
+            # Flush remaining
+            if batch:
+                if fast:
+                    db.put_batch_fast(batch, languages=self._languages)
+                else:
                     db.put_batch(
                         batch,
                         dump_date=date.today(),
                         source="dump",
                         languages=self._languages,
                     )
-                    loaded += len(batch)
-                    batch = []
-
-            # Flush remaining
-            if batch:
-                db.put_batch(
-                    batch,
-                    dump_date=date.today(),
-                    source="dump",
-                    languages=self._languages,
-                )
                 loaded += len(batch)
 
-            log.info("dump_complete", scanned=scanned, loaded=loaded)
+            if label_batch:
+                db.put_labels_only(label_batch, languages=self._languages)
+                labels_saved += len(label_batch)
+
+            log.info("dump_complete", scanned=scanned, loaded=loaded,
+                     labels_saved=labels_saved)
         finally:
             db.close()
 

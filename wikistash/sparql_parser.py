@@ -24,6 +24,12 @@ class Filter:
 
 
 @dataclass
+class LangFilter:
+    variable: str
+    language: str
+
+
+@dataclass
 class ValuesClause:
     variable: str
     values: list[str]
@@ -39,6 +45,7 @@ class SparqlQuery:
     select_vars: list[str] = field(default_factory=list)
     triple_patterns: list[TriplePattern] = field(default_factory=list)
     filters: list[Filter] = field(default_factory=list)
+    lang_filters: list[LangFilter] = field(default_factory=list)
     values_clauses: list[ValuesClause] = field(default_factory=list)
     label_service: LabelService | None = None
     limit: int | None = None
@@ -187,6 +194,9 @@ def _parse_optionals(body: str, result: SparqlQuery) -> str:
             r"\?\w+\s+schema:\w+\s+[^\s.;]+\s*[.;]?\s*", "", optional_body
         )
 
+        # Extract filters inside OPTIONAL
+        optional_body = _parse_filters(optional_body, result)
+
         _parse_triples(optional_body, result, is_optional=True)
         cleaned = cleaned[: match.start()] + cleaned[i:]
 
@@ -195,6 +205,7 @@ def _parse_optionals(body: str, result: SparqlQuery) -> str:
 
 def _parse_filters(body: str, result: SparqlQuery) -> str:
     """Extract FILTER expressions and return body with them removed."""
+    # Numeric comparison filters: FILTER(?var >= 20)
     pattern = re.compile(
         r"\bFILTER\s*\(\s*\?(\w+)\s*(>=|<=|>|<|=|!=)\s*(\d+(?:\.\d+)?)\s*\)",
         re.IGNORECASE,
@@ -205,7 +216,18 @@ def _parse_filters(body: str, result: SparqlQuery) -> str:
         value_str = match.group(3)
         value: int | float = float(value_str) if "." in value_str else int(value_str)
         result.filters.append(Filter(variable=variable, operator=operator, value=value))
-    return pattern.sub("", body)
+    body = pattern.sub("", body)
+
+    # Language filters: FILTER(LANG(?var) = "en")
+    lang_pattern = re.compile(
+        r'\bFILTER\s*\(\s*LANG\s*\(\s*\?(\w+)\s*\)\s*=\s*"([^"]+)"\s*\)',
+        re.IGNORECASE,
+    )
+    for match in lang_pattern.finditer(body):
+        result.lang_filters.append(LangFilter(variable=match.group(1), language=match.group(2)))
+    body = lang_pattern.sub("", body)
+
+    return body
 
 
 def _parse_triples(body: str, result: SparqlQuery, is_optional: bool) -> None:

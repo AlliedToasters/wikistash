@@ -189,6 +189,134 @@ class LocalDB:
             self._conn.execute("ROLLBACK")
             raise
 
+    def put_batch_fast(
+        self,
+        raw_entities: list[dict[str, Any]],
+        languages: list[str] | None = None,
+    ) -> None:
+        """Fast bulk insert — decomposed tables only, skips raw entity JSON.
+
+        Much faster for dump loading when only SPARQL queries are needed.
+        """
+        langs = languages or ["en"]
+        claims_rows: list[tuple] = []
+        labels_rows: list[tuple] = []
+        desc_rows: list[tuple] = []
+        alias_rows: list[tuple] = []
+        sitelinks_rows: list[tuple] = []
+
+        for raw_data in raw_entities:
+            qid = raw_data.get("id", "")
+
+            # Claims
+            for prop_id, statements in raw_data.get("claims", {}).items():
+                for stmt in statements:
+                    mainsnak = stmt.get("mainsnak", {})
+                    datavalue = mainsnak.get("datavalue")
+                    value_json = orjson.dumps(datavalue).decode("utf-8") if datavalue else None
+                    qualifiers = stmt.get("qualifiers")
+                    qual_json = orjson.dumps(qualifiers).decode("utf-8") if qualifiers else None
+                    claims_rows.append((
+                        qid, prop_id, value_json, stmt.get("rank", "normal"), qual_json
+                    ))
+
+            # Labels
+            for lang_code in langs:
+                label_data = raw_data.get("labels", {}).get(lang_code)
+                if label_data and isinstance(label_data, dict):
+                    labels_rows.append((qid, lang_code, label_data["value"]))
+
+            # Descriptions
+            for lang_code in langs:
+                desc_data = raw_data.get("descriptions", {}).get(lang_code)
+                if desc_data and isinstance(desc_data, dict):
+                    desc_rows.append((qid, lang_code, desc_data["value"]))
+
+            # Aliases
+            for lang_code in langs:
+                alias_data = raw_data.get("aliases", {}).get(lang_code)
+                if alias_data and isinstance(alias_data, list):
+                    alias_json = orjson.dumps(alias_data).decode("utf-8")
+                    alias_rows.append((qid, lang_code, alias_json))
+
+            # Sitelinks
+            sitelinks_data = raw_data.get("sitelinks", {})
+            sitelink_count = len(sitelinks_data) if isinstance(sitelinks_data, dict) else 0
+            sitelinks_rows.append((qid, sitelink_count))
+
+        self._conn.execute("BEGIN TRANSACTION")
+        try:
+            if claims_rows:
+                self._conn.executemany(
+                    "INSERT INTO claims (qid, property, value, rank, qualifiers) VALUES (?, ?, ?, ?, ?)",
+                    claims_rows,
+                )
+            if labels_rows:
+                self._conn.executemany(
+                    "INSERT INTO labels (qid, lang, value) VALUES (?, ?, ?)",
+                    labels_rows,
+                )
+            if desc_rows:
+                self._conn.executemany(
+                    "INSERT INTO descriptions (qid, lang, value) VALUES (?, ?, ?)",
+                    desc_rows,
+                )
+            if alias_rows:
+                self._conn.executemany(
+                    "INSERT INTO aliases (qid, lang, values) VALUES (?, ?, ?)",
+                    alias_rows,
+                )
+            if sitelinks_rows:
+                self._conn.executemany(
+                    "INSERT OR REPLACE INTO sitelinks (qid, count) VALUES (?, ?)",
+                    sitelinks_rows,
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+    def put_labels_only(
+        self,
+        raw_entities: list[dict[str, Any]],
+        languages: list[str] | None = None,
+    ) -> None:
+        """Insert only labels and descriptions for entities — no claims or sitelinks.
+
+        Used during filtered dump loads to ensure label resolution works
+        for all referenced entities, not just those matching the filter.
+        """
+        langs = languages or ["en"]
+        labels_rows: list[tuple] = []
+        desc_rows: list[tuple] = []
+
+        for raw_data in raw_entities:
+            qid = raw_data.get("id", "")
+            for lang_code in langs:
+                label_data = raw_data.get("labels", {}).get(lang_code)
+                if label_data and isinstance(label_data, dict):
+                    labels_rows.append((qid, lang_code, label_data["value"]))
+                desc_data = raw_data.get("descriptions", {}).get(lang_code)
+                if desc_data and isinstance(desc_data, dict):
+                    desc_rows.append((qid, lang_code, desc_data["value"]))
+
+        self._conn.execute("BEGIN TRANSACTION")
+        try:
+            if labels_rows:
+                self._conn.executemany(
+                    "INSERT INTO labels (qid, lang, value) VALUES (?, ?, ?)",
+                    labels_rows,
+                )
+            if desc_rows:
+                self._conn.executemany(
+                    "INSERT INTO descriptions (qid, lang, value) VALUES (?, ?, ?)",
+                    desc_rows,
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
     def get_connection(self) -> duckdb.DuckDBPyConnection:
         """Return the raw DuckDB connection (escape hatch)."""
         return self._conn

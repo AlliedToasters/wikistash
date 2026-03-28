@@ -9,10 +9,12 @@ from wikistash.sparql_parser import SparqlQuery
 # Well-known property types for value extraction
 ENTITY_ID_PROPERTIES = {
     "P31", "P21", "P27", "P50", "P105", "P106", "P131", "P170", "P171",
-    "P279", "P361", "P495", "P17", "P36", "P150", "P30",
+    "P279", "P361", "P495", "P17", "P36", "P150", "P30", "P138", "P61",
+    "P57", "P86",
 }
 TIME_PROPERTIES = {"P569", "P570", "P571", "P576", "P577", "P580", "P582", "P585"}
 QUANTITY_PROPERTIES = {"P1082", "P2044", "P2046", "P2047", "P2048", "P2067"}
+MONOLINGUAL_TEXT_PROPERTIES = {"P1843", "P1448", "P1476", "P1705"}
 
 
 def _property_id(predicate: str) -> str:
@@ -34,12 +36,15 @@ def _value_extract_expr(alias: str, prop_id: str) -> str:
         return f"json_extract_string({alias}.value, '$.value.time')"
     elif prop_id in QUANTITY_PROPERTIES:
         return f"json_extract_string({alias}.value, '$.value.amount')"
+    elif prop_id in MONOLINGUAL_TEXT_PROPERTIES:
+        return f"json_extract_string({alias}.value, '$.value.text')"
     else:
         return (
             f"COALESCE("
             f"json_extract_string({alias}.value, '$.value.id'), "
             f"json_extract_string({alias}.value, '$.value.time'), "
             f"json_extract_string({alias}.value, '$.value.amount'), "
+            f"json_extract_string({alias}.value, '$.value.text'), "
             f"CAST({alias}.value AS TEXT))"
         )
 
@@ -61,6 +66,10 @@ def compile_sparql(query: SparqlQuery) -> tuple[str, list[Any]]:
     sitelink_counter = 0
 
     # Build maps
+    lang_filter_map: dict[str, str] = {}
+    for lf in query.lang_filters:
+        lang_filter_map[lf.variable] = lf.language
+
     values_map: dict[str, list[str]] = {}
     for vc in query.values_clauses:
         values_map[vc.variable] = [_entity_id(v) for v in vc.values]
@@ -123,6 +132,10 @@ def compile_sparql(query: SparqlQuery) -> tuple[str, list[Any]]:
                 join_sql += f" AND json_extract_string({alias}.value, '$.value.id') IN ({placeholders})"
                 join_params.extend(ids)
 
+            if tp.object in lang_filter_map:
+                join_sql += f" AND json_extract_string({alias}.value, '$.value.language') = ?"
+                join_params.append(lang_filter_map[tp.object])
+
             joins.append((join_sql, join_params))
 
         if tp.subject not in var_map:
@@ -151,6 +164,10 @@ def compile_sparql(query: SparqlQuery) -> tuple[str, list[Any]]:
         if not _is_variable(tp.object):
             join_sql += f" AND json_extract_string({alias}.value, '$.value.id') = ?"
             join_params.append(_entity_id(tp.object))
+
+        if tp.object in lang_filter_map:
+            join_sql += f" AND json_extract_string({alias}.value, '$.value.language') = ?"
+            join_params.append(lang_filter_map[tp.object])
 
         joins.append((join_sql, join_params))
 
