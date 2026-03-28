@@ -8,6 +8,7 @@ from typing import Any
 
 import duckdb
 import orjson
+import pyarrow as pa
 
 from wikistash.models import Entity, parse_entity
 
@@ -62,19 +63,24 @@ class LocalDB:
                 count INTEGER NOT NULL
             )
         """)
-        # Indices
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_claims_qid_prop ON claims (qid, property)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_claims_prop_value ON claims (property, value)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_labels_qid_lang ON labels (qid, lang)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_desc_qid_lang ON descriptions (qid, lang)"
-        )
+        self.create_indices()
+
+    _INDEX_DEFS = [
+        ("idx_claims_qid_prop", "claims (qid, property)"),
+        ("idx_claims_prop_value", "claims (property, value)"),
+        ("idx_labels_qid_lang", "labels (qid, lang)"),
+        ("idx_desc_qid_lang", "descriptions (qid, lang)"),
+    ]
+
+    def create_indices(self) -> None:
+        """Create all indices. Safe to call multiple times."""
+        for name, definition in self._INDEX_DEFS:
+            self._conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {definition}")
+
+    def drop_indices(self) -> None:
+        """Drop all indices for fast bulk loading."""
+        for name, _ in self._INDEX_DEFS:
+            self._conn.execute(f"DROP INDEX IF EXISTS {name}")
 
     def get(self, qid: str, lang: str = "en") -> Entity | None:
         """Fetch a single entity by QID. Returns None if not found."""
@@ -244,37 +250,26 @@ class LocalDB:
             sitelink_count = len(sitelinks_data) if isinstance(sitelinks_data, dict) else 0
             sitelinks_rows.append((qid, sitelink_count))
 
-        self._conn.execute("BEGIN TRANSACTION")
-        try:
-            if claims_rows:
-                self._conn.executemany(
-                    "INSERT INTO claims (qid, property, value, rank, qualifiers) VALUES (?, ?, ?, ?, ?)",
-                    claims_rows,
-                )
-            if labels_rows:
-                self._conn.executemany(
-                    "INSERT INTO labels (qid, lang, value) VALUES (?, ?, ?)",
-                    labels_rows,
-                )
-            if desc_rows:
-                self._conn.executemany(
-                    "INSERT INTO descriptions (qid, lang, value) VALUES (?, ?, ?)",
-                    desc_rows,
-                )
-            if alias_rows:
-                self._conn.executemany(
-                    "INSERT INTO aliases (qid, lang, values) VALUES (?, ?, ?)",
-                    alias_rows,
-                )
-            if sitelinks_rows:
-                self._conn.executemany(
-                    "INSERT OR REPLACE INTO sitelinks (qid, count) VALUES (?, ?)",
-                    sitelinks_rows,
-                )
-            self._conn.execute("COMMIT")
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
+        if claims_rows:
+            cq, cp, cv, cr, ccq = zip(*claims_rows)
+            tbl = pa.table({"qid": cq, "property": cp, "value": cv, "rank": cr, "qualifiers": ccq})
+            self._conn.execute("INSERT INTO claims SELECT * FROM tbl")
+        if labels_rows:
+            lq, ll, lv = zip(*labels_rows)
+            tbl = pa.table({"qid": lq, "lang": ll, "value": lv})
+            self._conn.execute("INSERT INTO labels SELECT * FROM tbl")
+        if desc_rows:
+            dq, dl, dv = zip(*desc_rows)
+            tbl = pa.table({"qid": dq, "lang": dl, "value": dv})
+            self._conn.execute("INSERT INTO descriptions SELECT * FROM tbl")
+        if alias_rows:
+            aq, al, av = zip(*alias_rows)
+            tbl = pa.table({"qid": aq, "lang": al, "values": av})
+            self._conn.execute("INSERT INTO aliases SELECT * FROM tbl")
+        if sitelinks_rows:
+            sq, sc = zip(*sitelinks_rows)
+            tbl = pa.table({"qid": sq, "count": sc})
+            self._conn.execute("INSERT INTO sitelinks SELECT * FROM tbl")
 
     def put_labels_only(
         self,
@@ -300,22 +295,14 @@ class LocalDB:
                 if desc_data and isinstance(desc_data, dict):
                     desc_rows.append((qid, lang_code, desc_data["value"]))
 
-        self._conn.execute("BEGIN TRANSACTION")
-        try:
-            if labels_rows:
-                self._conn.executemany(
-                    "INSERT INTO labels (qid, lang, value) VALUES (?, ?, ?)",
-                    labels_rows,
-                )
-            if desc_rows:
-                self._conn.executemany(
-                    "INSERT INTO descriptions (qid, lang, value) VALUES (?, ?, ?)",
-                    desc_rows,
-                )
-            self._conn.execute("COMMIT")
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
+        if labels_rows:
+            lq, ll, lv = zip(*labels_rows)
+            tbl = pa.table({"qid": lq, "lang": ll, "value": lv})
+            self._conn.execute("INSERT INTO labels SELECT * FROM tbl")
+        if desc_rows:
+            dq, dl, dv = zip(*desc_rows)
+            tbl = pa.table({"qid": dq, "lang": dl, "value": dv})
+            self._conn.execute("INSERT INTO descriptions SELECT * FROM tbl")
 
     def get_connection(self) -> duckdb.DuckDBPyConnection:
         """Return the raw DuckDB connection (escape hatch)."""

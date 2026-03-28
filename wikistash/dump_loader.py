@@ -51,6 +51,9 @@ class DumpLoader:
         has_filter = (filter_qids is not None or instance_of is not None
                       or has_property is not None)
         db = LocalDB(self._db_path)
+        if fast:
+            log.info("dropping_indices_for_bulk_load")
+            db.drop_indices()
         try:
             batch: list[dict] = []
             label_batch: list[dict] = []
@@ -108,6 +111,11 @@ class DumpLoader:
             if label_batch:
                 db.put_labels_only(label_batch, languages=self._languages)
                 labels_saved += len(label_batch)
+
+            if fast:
+                log.info("creating_indices")
+                db.create_indices()
+                log.info("indices_created")
 
             log.info("dump_complete", scanned=scanned, loaded=loaded,
                      labels_saved=labels_saved)
