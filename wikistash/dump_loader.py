@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import gzip
-from datetime import date
+import hashlib
+import os
+from datetime import date, timezone, datetime
 from pathlib import Path
 from typing import Iterator
 
@@ -33,6 +35,7 @@ class DumpLoader:
         batch_size: int = 10_000,
         progress_interval: int = 100_000,
         fast: bool = False,
+        hash_dump: bool = False,
     ) -> None:
         """Load a Wikidata JSON dump into the local DB.
 
@@ -47,6 +50,9 @@ class DumpLoader:
             progress_interval: Log progress every N entities scanned.
             fast: If True, skip raw entity JSON storage and use bulk inserts.
                 Much faster but stash.get() won't work — SPARQL queries only.
+            hash_dump: If True, SHA-256 the dump file for a strong content-based
+                snapshot hash. Adds ~30s for a 142GB file. Default False uses
+                file size + mtime for a fast, weaker fingerprint.
         """
         has_filter = (filter_qids is not None or instance_of is not None
                       or has_property is not None)
@@ -119,8 +125,69 @@ class DumpLoader:
 
             log.info("dump_complete", scanned=scanned, loaded=loaded,
                      labels_saved=labels_saved)
+
+            # Store snapshot metadata for reproducibility
+            dump_path = Path(dump_path)
+            dump_fingerprint = self._dump_fingerprint(dump_path, full_hash=hash_dump)
+            snapshot_hash = self._compute_snapshot_hash(
+                dump_fingerprint=dump_fingerprint,
+                filter_qids=filter_qids,
+                instance_of=instance_of,
+                has_property=has_property,
+            )
+            db.set_metadata("snapshot_hash", snapshot_hash)
+            db.set_metadata("dump_path", str(dump_path.resolve()))
+            db.set_metadata("dump_fingerprint", dump_fingerprint)
+            db.set_metadata("load_date", date.today().isoformat())
+            db.set_metadata("entity_count", str(loaded))
+            db.set_metadata("hash_dump", "true" if hash_dump else "false")
+            filters: dict = {}
+            if filter_qids is not None:
+                filters["filter_qids"] = sorted(filter_qids)
+            if instance_of is not None:
+                filters["instance_of"] = sorted(instance_of)
+            if has_property is not None:
+                filters["has_property"] = sorted(has_property)
+            db.set_metadata("filters", orjson.dumps(filters).decode())
+            log.info("snapshot_hash_stored", snapshot_hash=snapshot_hash)
         finally:
             db.close()
+
+    def _dump_fingerprint(self, dump_path: Path, full_hash: bool) -> str:
+        """Return a fingerprint string for the dump file.
+
+        With full_hash=True: SHA-256 of the file contents (strong, slow).
+        With full_hash=False: SHA-256 of "path|size|mtime" (fast, weaker).
+        """
+        if full_hash:
+            log.info("hashing_dump_file", path=str(dump_path))
+            h = hashlib.sha256()
+            with open(dump_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+        else:
+            stat = os.stat(dump_path)
+            parts = f"{dump_path.name}|{stat.st_size}|{stat.st_mtime}"
+            return hashlib.sha256(parts.encode()).hexdigest()
+
+    def _compute_snapshot_hash(
+        self,
+        dump_fingerprint: str,
+        filter_qids: set[str] | None,
+        instance_of: set[str] | None,
+        has_property: set[str] | None,
+    ) -> str:
+        """Stable hash of dump fingerprint + sorted filters."""
+        h = hashlib.sha256()
+        h.update(dump_fingerprint.encode())
+        h.update(b"|filter_qids=")
+        h.update(",".join(sorted(filter_qids or [])).encode())
+        h.update(b"|instance_of=")
+        h.update(",".join(sorted(instance_of or [])).encode())
+        h.update(b"|has_property=")
+        h.update(",".join(sorted(has_property or [])).encode())
+        return h.hexdigest()
 
     def _iter_entities(self, dump_path: Path | str) -> Iterator[dict]:
         """Stream entities from the dump, handling the array-wrapper format."""

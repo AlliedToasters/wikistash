@@ -12,6 +12,8 @@ import pyarrow as pa
 
 from wikistash.models import Entity, parse_entity
 
+_SNAPSHOT_HASH_KEY = "snapshot_hash"
+
 
 class LocalDB:
     def __init__(self, db_path: Path | str) -> None:
@@ -61,6 +63,12 @@ class LocalDB:
             CREATE TABLE IF NOT EXISTS sitelinks (
                 qid TEXT PRIMARY KEY,
                 count INTEGER NOT NULL
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS db_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
         """)
         self.create_indices()
@@ -303,6 +311,29 @@ class LocalDB:
             dq, dl, dv = zip(*desc_rows)
             tbl = pa.table({"qid": dq, "lang": dl, "value": dv})
             self._conn.execute("INSERT INTO descriptions SELECT * FROM tbl")
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Upsert a metadata key/value pair."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO db_metadata (key, value) VALUES (?, ?)",
+            [key, value],
+        )
+
+    def get_metadata(self, key: str) -> str | None:
+        """Fetch a metadata value by key. Returns None if not set."""
+        row = self._conn.execute(
+            "SELECT value FROM db_metadata WHERE key = ?", [key]
+        ).fetchone()
+        return row[0] if row else None
+
+    def snapshot_hash(self) -> str | None:
+        """Return the snapshot hash stored at load time, or None if not set."""
+        return self.get_metadata(_SNAPSHOT_HASH_KEY)
+
+    def snapshot_info(self) -> dict[str, str]:
+        """Return all metadata key/value pairs as a dict."""
+        rows = self._conn.execute("SELECT key, value FROM db_metadata").fetchall()
+        return {k: v for k, v in rows}
 
     def get_connection(self) -> duckdb.DuckDBPyConnection:
         """Return the raw DuckDB connection (escape hatch)."""

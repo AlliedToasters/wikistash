@@ -96,6 +96,22 @@ class Stash:
 
         return execute_sparql_json(self._local_db.get_connection(), query)
 
+    def snapshot_hash(self) -> str | None:
+        """Return the snapshot hash recorded at load time.
+
+        Returns None if no database is loaded or no hash has been recorded yet.
+        Identical hash means same dump + same filters — safe to reuse cached results.
+        """
+        if self._local_db is None:
+            return None
+        return self._local_db.snapshot_hash()
+
+    def snapshot_info(self) -> dict[str, str] | None:
+        """Return full load provenance metadata, or None if no database is loaded."""
+        if self._local_db is None:
+            return None
+        return self._local_db.snapshot_info()
+
     def duckdb(self) -> duckdb.DuckDBPyConnection:
         """Return the raw DuckDB connection for SQL queries."""
         if self._local_db is None:
