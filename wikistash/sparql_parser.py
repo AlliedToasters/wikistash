@@ -255,8 +255,8 @@ def _parse_triples(body: str, result: SparqlQuery, is_optional: bool) -> None:
                 continue
 
             tokens = part.split()
-            if len(tokens) >= 3 and tokens[0].startswith("?"):
-                # Full triple: ?subject predicate object
+            if len(tokens) >= 3 and (tokens[0].startswith("?") or tokens[0].startswith("wd:")):
+                # Full triple: ?subject/?entity predicate object
                 current_subject = tokens[0].lstrip("?")
                 predicate = tokens[1]
                 obj = tokens[2]

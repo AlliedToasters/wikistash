@@ -106,6 +106,11 @@ def compile_sparql(query: SparqlQuery) -> tuple[str, list[Any]]:
             where_conditions.append(f"{alias}.property = ?")
             where_params.append(prop_id)
 
+            # Bound subject (e.g. wd:Q140)
+            if not _is_variable(tp.subject):
+                where_conditions.append(f"{alias}.qid = ?")
+                where_params.append(_entity_id(tp.subject))
+
             if not _is_variable(tp.object):
                 where_conditions.append(
                     f"json_extract_string({alias}.value, '$.value.id') = ?"
